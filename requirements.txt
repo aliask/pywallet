@@ -1,0 +1,2 @@
+berkeleydb==18.1.5
+ecdsa==0.17.0

@@ -1,8 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #-*- coding: utf-8 -*-
-from __future__ import print_function
-pywversion="2.2"
-never_update=False
 
 #
 # jackjack's pywallet.py
@@ -10,92 +7,40 @@ never_update=False
 # forked from Joric's pywallet.py
 #
 
-
+import codecs
+from concurrent.futures import thread
+from copy import deepcopy
+from datetime import datetime
+from functools import reduce
+from types import MethodType
+import base64
+import binascii
+import bisect
+import collections
+import getpass
+import hashlib
+import hmac
+import itertools
+import json
+import logging
+from math import log
+import mmap
+import os, time, re
+from operator import xor
+from optparse import OptionParser
+import random
+import socket
+import struct
 import sys
-PY3 = sys.version_info.major > 2
+import traceback
+import unicodedata
+import urllib.request
 
-import warnings
-def warning_on_one_line(message, category, filename, lineno, file=None, line=None):
-	return '%s:%s: %s: %s\n' % (filename, lineno, category.__name__, message)
-warnings.formatwarning = warning_on_one_line
-if PY3:
-	warnings.warn("Python 3 support is still experimental, you may encounter bugs")
-	import _thread as thread
-	import functools
-	raw_input = input
-	xrange = range
-	long = int
-	unicode = str
-	reduce = functools.reduce
-else:
-	import thread
+from berkeleydb.db import DB, DBEnv, DBError, DB_CREATE, DB_INIT_LOCK, DB_INIT_LOG, DB_INIT_MPOOL, DB_INIT_TXN, DB_THREAD, DB_RECOVER, DB_RDONLY, DB_BTREE
+
+from aes import chrsix, ordsix, bytes_to_str, str_to_bytes, crypter
 
 missing_dep = []
-
-try:
-	from bsddb.db import *
-except:
-	try:
-		from bsddb3.db import *
-	except:
-		missing_dep.append('bsddb')
-
-import os, sys, time, re
-pyw_filename = os.path.basename(__file__)
-pyw_path = os.path.dirname(os.path.realpath(__file__))
-
-try:
-	import simplejson as json
-except:
-	import json
-
-import bisect
-import itertools
-import unicodedata
-import hmac
-import getpass
-import logging
-import struct
-import traceback
-import socket
-import types
-import string
-import hashlib
-import random
-import urllib
-import math
-import base64
-import collections
-import weakref
-import binascii
-from types import MethodType
-import unittest
-
-from datetime import datetime
-from subprocess import *
-
-import os
-import os.path
-import platform
-
-def ordsix(x):
-	if x.__class__ == int:return x
-	return ord(x)
-def chrsix(x):
-	if not(x.__class__ in [int, long]):return x
-	if PY3:return bytes([x])
-	return chr(x)
-
-def str_to_bytes(k):
-	if k.__class__ == str and not hasattr(k, 'decode'):
-		return bytes(k, 'ascii')
-	return k
-def bytes_to_str(k):
-	if k.__class__ == bytes:
-		return k.decode()
-	if k.__class__ == unicode:
-		return bytes_to_str(k.encode())
-	return k
 
 class Bdict(dict):
 	def __init__(self, *a, **kw):
@@ -123,7 +68,6 @@ class Bdict(dict):
 max_version = 81000
 json_db = Bdict({})
 private_keys = []
-private_hex_keys = []
 passphrase = ""
 global_merging_message = ["",""]
 CNT = collections.namedtuple
@@ -131,39 +75,35 @@ CNT = collections.namedtuple
 balance_site = 'https://blockchain.info/q/addressbalance/'
 backup_balance_site ='https://api.blockcypher.com/v1/btc/main/addrs/'
 
-aversions = {}
-for i in range(256):
-	aversions[i] = "version %d" % i;
-aversions[0] = 'Bitcoin';
-aversions[48] = 'Litecoin';
-aversions[52] = 'Namecoin';
-aversions[111] = 'Testnet';
-
-class Network(collections.namedtuple('Network', 'name p2pkh_prefix p2sh_prefix wif_prefix segwit_hrp')):
+class Network:
 	instances = []
-	def __init__(self, *a, **kw):
+	def __init__(self,	name: str, p2pkh_prefix: int, p2sh_prefix: int, wif_prefix: int, segwit_hrp: str):
+		self.name = name
+		self.p2pkh_prefix = p2pkh_prefix
+		self.p2sh_prefix = p2sh_prefix
+		self.wif_prefix = wif_prefix
+		self.segwit_hrp = segwit_hrp
 		self.__class__.instances.append(self)
-		super(Network, self).__init__()
 	def keyinfo(self, *a, **kw):
 		pass
 
 def eip55(hex_addr):
-    if hex_addr[:2] == '0x':hex_addr = hex_addr[2:]
-    hex_addr = hex_addr.lower()
-    checksummed_buffer = ""
-    hashed_address = bytes_to_str(binascii.hexlify(Keccak256(hex_addr).digest()))
-    for nibble_index, character in enumerate(hex_addr):
-        if character in "0123456789":
-            checksummed_buffer += character
-        elif character in "abcdef":
-            hashed_address_nibble = int(hashed_address[nibble_index], 16)
-            if hashed_address_nibble > 7:
-                checksummed_buffer += character.upper()
-            else:
-                checksummed_buffer += character
-        else:
-            raise ValueError("Unrecognized hex character {} at position {}".format(character, nibble_index))
-    return "0x" + checksummed_buffer
+	if hex_addr[:2] == '0x':hex_addr = hex_addr[2:]
+	hex_addr = hex_addr.lower()
+	checksummed_buffer = ""
+	hashed_address = bytes_to_str(binascii.hexlify(Keccak256(hex_addr).digest()))
+	for nibble_index, character in enumerate(hex_addr):
+		if character in "0123456789":
+			checksummed_buffer += character
+		elif character in "abcdef":
+			hashed_address_nibble = int(hashed_address[nibble_index], 16)
+			if hashed_address_nibble > 7:
+				checksummed_buffer += character.upper()
+			else:
+				checksummed_buffer += character
+		else:
+			raise ValueError("Unrecognized hex character {} at position {}".format(character, nibble_index))
+	return "0x" + checksummed_buffer
 
 def ethereum_keyinfo(self, keyinfo, print_info=True):
 	ethpubkey = keyinfo.uncompressed_public_key[1:]
@@ -178,14 +118,21 @@ network_bitcoin = Network('Bitcoin', 0, 5, 0x80, 'bc')
 network_bitcoin_testnet3 = Network('Bitcoin-Testnet3', 0x6f, 0xc4, 0xef, 'tb')
 network_ethereum = Network('Ethereum', 0, 5, 0x80, 'eth')
 network_ethereum.keyinfo = MethodType(ethereum_keyinfo, network_ethereum)
+network_dogecoin = Network('Dogecoin', 30, 0x16, 0x9e, 'doge')
+network_namecoin = Network('Namecoin', 52, 13, 180, 'nc')
+
 network = network_bitcoin
+
 def find_network(name):
 	for n in Network.instances:
-		if n.name.lower() == name.lower():
-			return n
+		try:
+			if n.p2pkh_prefix == int(name):
+				return n
+		except ValueError:
+			if n.name.lower() == name.lower():
+				return n
 	return None
 
-wallet_dir = ""
 wallet_name = ""
 
 ko = 1e3
@@ -206,33 +153,6 @@ def plural(a):
 	if a>=2:return 's'
 	return ''
 
-def systype():
-	if platform.system() == "Darwin":return 'Mac'
-	elif platform.system() == "Windows":return 'Win'
-	return 'Linux'
-
-def determine_db_dir():
-	if wallet_dir in "":
-		if platform.system() == "Darwin":
-			return os.path.expanduser("~/Library/Application Support/Bitcoin/")
-		elif platform.system() == "Windows":
-			return os.path.join(os.environ['APPDATA'], "Bitcoin")
-		return os.path.expanduser("~/.bitcoin")
-	else:
-		return wallet_dir
-
-def determine_db_name():
-	if wallet_name in "":
-		return "wallet.dat"
-	else:
-		return wallet_name
-
-########################
-########################
-
-from math import log
-from operator import xor
-from copy import deepcopy
 RoundConstants=[1,32898,0x800000000000808a,0x8000000080008000,32907,2147483649,0x8000000080008081,0x8000000000008009,138,136,2147516425,2147483658,2147516555,0x800000000000008b,0x8000000000008089,0x8000000000008003,0x8000000000008002,0x8000000000000080,32778,0x800000008000000a,0x8000000080008081,0x8000000000008080,2147483649,0x8000000080008008]
 RotationConstants=[[0,1,62,28,27],[36,44,6,55,20],[3,10,43,25,39],[41,45,15,21,8],[18,2,61,56,14]]
 Masks=[(1<<i)-1 for i in range(65)]
@@ -246,7 +166,10 @@ def multirate_padding(used_bytes,align_bytes):
 	else:return[1]+[0]*(padlen-2)+[128]
 def keccak_f(state):
 	def round(A,RC):
-		W,H=state.W,state.H;rangeW,rangeH=state.rangeW,state.rangeH;lanew=state.lanew;zero=state.zero;C=[reduce(xor,A[x])for x in rangeW];D=[0]*W
+		W,H=state.W,state.H
+		rangeW,rangeH=state.rangeW,state.rangeH
+		lanew=state.lanew;zero=state.zero
+		C=[reduce(xor,A[x])for x in rangeW];D=[0]*W
 		for x in rangeW:
 			D[x]=C[(x-1)%W]^rol(C[(x+1)%W],1,lanew)
 			for y in rangeH:A[x][y]^=D[x]
@@ -257,7 +180,7 @@ def keccak_f(state):
 			for y in rangeH:A[x][y]=B[x][y]^~ B[(x+1)%W][y]&B[(x+2)%W][y]
 		A[0][0]^=RC
 	l=int(log(state.lanew,2));nr=12+2*l
-	for ir in xrange(nr):round(state.s,RoundConstants[ir])
+	for ir in range(nr):round(state.s,RoundConstants[ir])
 class KeccakState:
 	W=5;H=5;rangeW=range(W);rangeH=range(H)
 	@staticmethod
@@ -268,7 +191,8 @@ class KeccakState:
 		def fmt(x):return'%016x'%x
 		for y in KeccakState.rangeH:
 			row=[]
-			for x in rangeW:row.append(fmt(st[x][y]))
+			for x in KeccakState.rangeW:
+				row.append(fmt(st[x][y]))
 			rows.append(' '.join(row))
 		return '\n'.join(rows)
 	@staticmethod
@@ -330,726 +254,11 @@ class KeccakHash:
 		return create
 Keccak256 = KeccakHash.preset(1088, 512, 256)
 
-########################
-########################
-
-########################
-# begin of aes.py code #
-########################
-
-# from the SlowAES project, http://code.google.com/p/slowaes (aes.py)
-
-def append_PKCS7_padding(s):
-	"""return s padded to a multiple of 16-bytes by PKCS7 padding"""
-	numpads = 16 - (len(s)%16)
-	return s + numpads*chrsix(numpads)
-
-def strip_PKCS7_padding(s):
-	"""return s stripped of PKCS7 padding"""
-	if len(s)%16 or not s:
-		raise ValueError("String of len %d can't be PCKS7-padded" % len(s))
-	numpads = ordsix(s[-1])
-	if numpads > 16:
-		raise ValueError("String ending with %r can't be PCKS7-padded" % s[-1])
-	return s[:-numpads]
-
-class AES(object):
-	# valid key sizes
-	keySize = dict(SIZE_128=16, SIZE_192=24, SIZE_256=32)
-
-	# Rijndael S-box
-	sbox =  [0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67,
-			0x2b, 0xfe, 0xd7, 0xab, 0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59,
-			0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0, 0xb7,
-			0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1,
-			0x71, 0xd8, 0x31, 0x15, 0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05,
-			0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75, 0x09, 0x83,
-			0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29,
-			0xe3, 0x2f, 0x84, 0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b,
-			0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf, 0xd0, 0xef, 0xaa,
-			0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c,
-			0x9f, 0xa8, 0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc,
-			0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2, 0xcd, 0x0c, 0x13, 0xec,
-			0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19,
-			0x73, 0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee,
-			0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb, 0xe0, 0x32, 0x3a, 0x0a, 0x49,
-			0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
-			0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4,
-			0xea, 0x65, 0x7a, 0xae, 0x08, 0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6,
-			0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a, 0x70,
-			0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9,
-			0x86, 0xc1, 0x1d, 0x9e, 0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e,
-			0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf, 0x8c, 0xa1,
-			0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0,
-			0x54, 0xbb, 0x16]
-
-	# Rijndael Inverted S-box
-	rsbox = [0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3,
-			0x9e, 0x81, 0xf3, 0xd7, 0xfb , 0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f,
-			0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb , 0x54,
-			0x7b, 0x94, 0x32, 0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b,
-			0x42, 0xfa, 0xc3, 0x4e , 0x08, 0x2e, 0xa1, 0x66, 0x28, 0xd9, 0x24,
-			0xb2, 0x76, 0x5b, 0xa2, 0x49, 0x6d, 0x8b, 0xd1, 0x25 , 0x72, 0xf8,
-			0xf6, 0x64, 0x86, 0x68, 0x98, 0x16, 0xd4, 0xa4, 0x5c, 0xcc, 0x5d,
-			0x65, 0xb6, 0x92 , 0x6c, 0x70, 0x48, 0x50, 0xfd, 0xed, 0xb9, 0xda,
-			0x5e, 0x15, 0x46, 0x57, 0xa7, 0x8d, 0x9d, 0x84 , 0x90, 0xd8, 0xab,
-			0x00, 0x8c, 0xbc, 0xd3, 0x0a, 0xf7, 0xe4, 0x58, 0x05, 0xb8, 0xb3,
-			0x45, 0x06 , 0xd0, 0x2c, 0x1e, 0x8f, 0xca, 0x3f, 0x0f, 0x02, 0xc1,
-			0xaf, 0xbd, 0x03, 0x01, 0x13, 0x8a, 0x6b , 0x3a, 0x91, 0x11, 0x41,
-			0x4f, 0x67, 0xdc, 0xea, 0x97, 0xf2, 0xcf, 0xce, 0xf0, 0xb4, 0xe6,
-			0x73 , 0x96, 0xac, 0x74, 0x22, 0xe7, 0xad, 0x35, 0x85, 0xe2, 0xf9,
-			0x37, 0xe8, 0x1c, 0x75, 0xdf, 0x6e , 0x47, 0xf1, 0x1a, 0x71, 0x1d,
-			0x29, 0xc5, 0x89, 0x6f, 0xb7, 0x62, 0x0e, 0xaa, 0x18, 0xbe, 0x1b ,
-			0xfc, 0x56, 0x3e, 0x4b, 0xc6, 0xd2, 0x79, 0x20, 0x9a, 0xdb, 0xc0,
-			0xfe, 0x78, 0xcd, 0x5a, 0xf4 , 0x1f, 0xdd, 0xa8, 0x33, 0x88, 0x07,
-			0xc7, 0x31, 0xb1, 0x12, 0x10, 0x59, 0x27, 0x80, 0xec, 0x5f , 0x60,
-			0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f,
-			0x93, 0xc9, 0x9c, 0xef , 0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5,
-			0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61 , 0x17, 0x2b,
-			0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55,
-			0x21, 0x0c, 0x7d]
-
-	def getSBoxValue(self,num):
-		"""Retrieves a given S-Box Value"""
-		return self.sbox[num]
-
-	def getSBoxInvert(self,num):
-		"""Retrieves a given Inverted S-Box Value"""
-		return self.rsbox[num]
-
-	def rotate(self, word):
-		""" Rijndael's key schedule rotate operation.
-
-		Rotate a word eight bits to the left: eg, rotate(1d2c3a4f) == 2c3a4f1d
-		Word is an char list of size 4 (32 bits overall).
-		"""
-		return word[1:] + word[:1]
-
-	# Rijndael Rcon
-	Rcon = [0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36,
-			0x6c, 0xd8, 0xab, 0x4d, 0x9a, 0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97,
-			0x35, 0x6a, 0xd4, 0xb3, 0x7d, 0xfa, 0xef, 0xc5, 0x91, 0x39, 0x72,
-			0xe4, 0xd3, 0xbd, 0x61, 0xc2, 0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66,
-			0xcc, 0x83, 0x1d, 0x3a, 0x74, 0xe8, 0xcb, 0x8d, 0x01, 0x02, 0x04,
-			0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d,
-			0x9a, 0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97, 0x35, 0x6a, 0xd4, 0xb3,
-			0x7d, 0xfa, 0xef, 0xc5, 0x91, 0x39, 0x72, 0xe4, 0xd3, 0xbd, 0x61,
-			0xc2, 0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66, 0xcc, 0x83, 0x1d, 0x3a,
-			0x74, 0xe8, 0xcb, 0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40,
-			0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d, 0x9a, 0x2f, 0x5e, 0xbc,
-			0x63, 0xc6, 0x97, 0x35, 0x6a, 0xd4, 0xb3, 0x7d, 0xfa, 0xef, 0xc5,
-			0x91, 0x39, 0x72, 0xe4, 0xd3, 0xbd, 0x61, 0xc2, 0x9f, 0x25, 0x4a,
-			0x94, 0x33, 0x66, 0xcc, 0x83, 0x1d, 0x3a, 0x74, 0xe8, 0xcb, 0x8d,
-			0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c,
-			0xd8, 0xab, 0x4d, 0x9a, 0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97, 0x35,
-			0x6a, 0xd4, 0xb3, 0x7d, 0xfa, 0xef, 0xc5, 0x91, 0x39, 0x72, 0xe4,
-			0xd3, 0xbd, 0x61, 0xc2, 0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66, 0xcc,
-			0x83, 0x1d, 0x3a, 0x74, 0xe8, 0xcb, 0x8d, 0x01, 0x02, 0x04, 0x08,
-			0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d, 0x9a,
-			0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97, 0x35, 0x6a, 0xd4, 0xb3, 0x7d,
-			0xfa, 0xef, 0xc5, 0x91, 0x39, 0x72, 0xe4, 0xd3, 0xbd, 0x61, 0xc2,
-			0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66, 0xcc, 0x83, 0x1d, 0x3a, 0x74,
-			0xe8, 0xcb ]
-
-	def getRconValue(self, num):
-		"""Retrieves a given Rcon Value"""
-		return self.Rcon[num]
-
-	def core(self, word, iteration):
-		"""Key schedule core."""
-		# rotate the 32-bit word 8 bits to the left
-		word = self.rotate(word)
-		# apply S-Box substitution on all 4 parts of the 32-bit word
-		for i in range(4):
-			word[i] = self.getSBoxValue(word[i])
-		# XOR the output of the rcon operation with i to the first part
-		# (leftmost) only
-		word[0] = word[0] ^ self.getRconValue(iteration)
-		return word
-
-	def expandKey(self, key, size, expandedKeySize):
-		"""Rijndael's key expansion.
-
-		Expands an 128,192,256 key into an 176,208,240 bytes key
-
-		expandedKey is a char list of large enough size,
-		key is the non-expanded key.
-		"""
-		# current expanded keySize, in bytes
-		currentSize = 0
-		rconIteration = 1
-		expandedKey = [0] * expandedKeySize
-
-		# set the 16, 24, 32 bytes of the expanded key to the input key
-		for j in range(size):
-			expandedKey[j] = key[j]
-		currentSize += size
-
-		while currentSize < expandedKeySize:
-			# assign the previous 4 bytes to the temporary value t
-			t = expandedKey[currentSize-4:currentSize]
-
-			# every 16,24,32 bytes we apply the core schedule to t
-			# and increment rconIteration afterwards
-			if currentSize % size == 0:
-				t = self.core(t, rconIteration)
-				rconIteration += 1
-			# For 256-bit keys, we add an extra sbox to the calculation
-			if size == self.keySize["SIZE_256"] and ((currentSize % size) == 16):
-				for l in range(4): t[l] = self.getSBoxValue(t[l])
-
-			# We XOR t with the four-byte block 16,24,32 bytes before the new
-			# expanded key.  This becomes the next four bytes in the expanded
-			# key.
-			for m in range(4):
-				expandedKey[currentSize] = expandedKey[currentSize - size] ^ \
-						t[m]
-				currentSize += 1
-
-		return expandedKey
-
-	def addRoundKey(self, state, roundKey):
-		"""Adds (XORs) the round key to the state."""
-		for i in range(16):
-			state[i] ^= roundKey[i]
-		return state
-
-	def createRoundKey(self, expandedKey, roundKeyPointer):
-		"""Create a round key.
-		Creates a round key from the given expanded key and the
-		position within the expanded key.
-		"""
-		roundKey = [0] * 16
-		for i in range(4):
-			for j in range(4):
-				roundKey[j*4+i] = expandedKey[roundKeyPointer + i*4 + j]
-		return roundKey
-
-	def galois_multiplication(self, a, b):
-		"""Galois multiplication of 8 bit characters a and b."""
-		p = 0
-		for counter in range(8):
-			if b & 1: p ^= a
-			hi_bit_set = a & 0x80
-			a <<= 1
-			# keep a 8 bit
-			a &= 0xFF
-			if hi_bit_set:
-				a ^= 0x1b
-			b >>= 1
-		return p
-
-	#
-	# substitute all the values from the state with the value in the SBox
-	# using the state value as index for the SBox
-	#
-	def subBytes(self, state, isInv):
-		if isInv: getter = self.getSBoxInvert
-		else: getter = self.getSBoxValue
-		for i in range(16): state[i] = getter(state[i])
-		return state
-
-	# iterate over the 4 rows and call shiftRow() with that row
-	def shiftRows(self, state, isInv):
-		for i in range(4):
-			state = self.shiftRow(state, i*4, i, isInv)
-		return state
-
-	# each iteration shifts the row to the left by 1
-	def shiftRow(self, state, statePointer, nbr, isInv):
-		for i in range(nbr):
-			if isInv:
-				state[statePointer:statePointer+4] = \
-						state[statePointer+3:statePointer+4] + \
-						state[statePointer:statePointer+3]
-			else:
-				state[statePointer:statePointer+4] = \
-						state[statePointer+1:statePointer+4] + \
-						state[statePointer:statePointer+1]
-		return state
-
-	# galois multiplication of the 4x4 matrix
-	def mixColumns(self, state, isInv):
-		# iterate over the 4 columns
-		for i in range(4):
-			# construct one column by slicing over the 4 rows
-			column = state[i:i+16:4]
-			# apply the mixColumn on one column
-			column = self.mixColumn(column, isInv)
-			# put the values back into the state
-			state[i:i+16:4] = column
-
-		return state
-
-	# galois multiplication of 1 column of the 4x4 matrix
-	def mixColumn(self, column, isInv):
-		if isInv: mult = [14, 9, 13, 11]
-		else: mult = [2, 1, 1, 3]
-		cpy = list(column)
-		g = self.galois_multiplication
-
-		column[0] = g(cpy[0], mult[0]) ^ g(cpy[3], mult[1]) ^ \
-					g(cpy[2], mult[2]) ^ g(cpy[1], mult[3])
-		column[1] = g(cpy[1], mult[0]) ^ g(cpy[0], mult[1]) ^ \
-					g(cpy[3], mult[2]) ^ g(cpy[2], mult[3])
-		column[2] = g(cpy[2], mult[0]) ^ g(cpy[1], mult[1]) ^ \
-					g(cpy[0], mult[2]) ^ g(cpy[3], mult[3])
-		column[3] = g(cpy[3], mult[0]) ^ g(cpy[2], mult[1]) ^ \
-					g(cpy[1], mult[2]) ^ g(cpy[0], mult[3])
-		return column
-
-	# applies the 4 operations of the forward round in sequence
-	def aes_round(self, state, roundKey):
-		state = self.subBytes(state, False)
-		state = self.shiftRows(state, False)
-		state = self.mixColumns(state, False)
-		state = self.addRoundKey(state, roundKey)
-		return state
-
-	# applies the 4 operations of the inverse round in sequence
-	def aes_invRound(self, state, roundKey):
-		state = self.shiftRows(state, True)
-		state = self.subBytes(state, True)
-		state = self.addRoundKey(state, roundKey)
-		state = self.mixColumns(state, True)
-		return state
-
-	# Perform the initial operations, the standard round, and the final
-	# operations of the forward aes, creating a round key for each round
-	def aes_main(self, state, expandedKey, nbrRounds):
-		state = self.addRoundKey(state, self.createRoundKey(expandedKey, 0))
-		i = 1
-		while i < nbrRounds:
-			state = self.aes_round(state,
-								   self.createRoundKey(expandedKey, 16*i))
-			i += 1
-		state = self.subBytes(state, False)
-		state = self.shiftRows(state, False)
-		state = self.addRoundKey(state,
-								 self.createRoundKey(expandedKey, 16*nbrRounds))
-		return state
-
-	# Perform the initial operations, the standard round, and the final
-	# operations of the inverse aes, creating a round key for each round
-	def aes_invMain(self, state, expandedKey, nbrRounds):
-		state = self.addRoundKey(state,
-								 self.createRoundKey(expandedKey, 16*nbrRounds))
-		i = nbrRounds - 1
-		while i > 0:
-			state = self.aes_invRound(state,
-									  self.createRoundKey(expandedKey, 16*i))
-			i -= 1
-		state = self.shiftRows(state, True)
-		state = self.subBytes(state, True)
-		state = self.addRoundKey(state, self.createRoundKey(expandedKey, 0))
-		return state
-
-	# encrypts a 128 bit input block against the given key of size specified
-	def encrypt(self, iput, key, size):
-		output = [0] * 16
-		# the number of rounds
-		nbrRounds = 0
-		# the 128 bit block to encode
-		block = [0] * 16
-		# set the number of rounds
-		if size == self.keySize["SIZE_128"]: nbrRounds = 10
-		elif size == self.keySize["SIZE_192"]: nbrRounds = 12
-		elif size == self.keySize["SIZE_256"]: nbrRounds = 14
-		else: return None
-
-		# the expanded keySize
-		expandedKeySize = 16*(nbrRounds+1)
-
-		# Set the block values, for the block:
-		# a0,0 a0,1 a0,2 a0,3
-		# a1,0 a1,1 a1,2 a1,3
-		# a2,0 a2,1 a2,2 a2,3
-		# a3,0 a3,1 a3,2 a3,3
-		# the mapping order is a0,0 a1,0 a2,0 a3,0 a0,1 a1,1 ... a2,3 a3,3
-		#
-		# iterate over the columns
-		for i in range(4):
-			# iterate over the rows
-			for j in range(4):
-				block[(i+(j*4))] = iput[(i*4)+j]
-
-		# expand the key into an 176, 208, 240 bytes key
-		# the expanded key
-		expandedKey = self.expandKey(key, size, expandedKeySize)
-
-		# encrypt the block using the expandedKey
-		block = self.aes_main(block, expandedKey, nbrRounds)
-
-		# unmap the block again into the output
-		for k in range(4):
-			# iterate over the rows
-			for l in range(4):
-				output[(k*4)+l] = block[(k+(l*4))]
-		return output
-
-	# decrypts a 128 bit input block against the given key of size specified
-	def decrypt(self, iput, key, size):
-		output = [0] * 16
-		# the number of rounds
-		nbrRounds = 0
-		# the 128 bit block to decode
-		block = [0] * 16
-		# set the number of rounds
-		if size == self.keySize["SIZE_128"]: nbrRounds = 10
-		elif size == self.keySize["SIZE_192"]: nbrRounds = 12
-		elif size == self.keySize["SIZE_256"]: nbrRounds = 14
-		else: return None
-
-		# the expanded keySize
-		expandedKeySize = 16*(nbrRounds+1)
-
-		# Set the block values, for the block:
-		# a0,0 a0,1 a0,2 a0,3
-		# a1,0 a1,1 a1,2 a1,3
-		# a2,0 a2,1 a2,2 a2,3
-		# a3,0 a3,1 a3,2 a3,3
-		# the mapping order is a0,0 a1,0 a2,0 a3,0 a0,1 a1,1 ... a2,3 a3,3
-
-		# iterate over the columns
-		for i in range(4):
-			# iterate over the rows
-			for j in range(4):
-				block[(i+(j*4))] = iput[(i*4)+j]
-		# expand the key into an 176, 208, 240 bytes key
-		expandedKey = self.expandKey(key, size, expandedKeySize)
-		# decrypt the block using the expandedKey
-		block = self.aes_invMain(block, expandedKey, nbrRounds)
-		# unmap the block again into the output
-		for k in range(4):
-			# iterate over the rows
-			for l in range(4):
-				output[(k*4)+l] = block[(k+(l*4))]
-		return output
-
-class AESModeOfOperation(object):
-
-	aes = AES()
-
-	# structure of supported modes of operation
-	modeOfOperation = dict(OFB=0, CFB=1, CBC=2)
-
-	# converts a 16 character string into a number array
-	def convertString(self, string, start, end, mode):
-		if end - start > 16: end = start + 16
-		if mode == self.modeOfOperation["CBC"]: ar = [0] * 16
-		else: ar = []
-
-		i = start
-		j = 0
-		while len(ar) < end - start:
-			ar.append(0)
-		while i < end:
-			ar[j] = ordsix(string[i])
-			j += 1
-			i += 1
-		return ar
-
-	# Mode of Operation Encryption
-	# stringIn - Input String
-	# mode - mode of type modeOfOperation
-	# hexKey - a hex key of the bit length size
-	# size - the bit length of the key
-	# hexIV - the 128 bit hex Initilization Vector
-	def encrypt(self, stringIn, mode, key, size, IV):
-		if len(key) % size:
-			return None
-		if len(IV) % 16:
-			return None
-		# the AES input/output
-		plaintext = []
-		iput = [0] * 16
-		output = []
-		ciphertext = [0] * 16
-		# the output cipher string
-		cipherOut = []
-		# char firstRound
-		firstRound = True
-		if stringIn != None:
-			for j in range(int(math.ceil(float(len(stringIn))//16))):
-				start = j*16
-				end = j*16+16
-				if  end > len(stringIn):
-					end = len(stringIn)
-				plaintext = self.convertString(stringIn, start, end, mode)
-				# print('PT@%s:%s' % (j, plaintext))
-				if mode == self.modeOfOperation["CFB"]:
-					if firstRound:
-						output = self.aes.encrypt(IV, key, size)
-						firstRound = False
-					else:
-						output = self.aes.encrypt(iput, key, size)
-					for i in range(16):
-						if len(plaintext)-1 < i:
-							ciphertext[i] = 0 ^ output[i]
-						elif len(output)-1 < i:
-							ciphertext[i] = plaintext[i] ^ 0
-						elif len(plaintext)-1 < i and len(output) < i:
-							ciphertext[i] = 0 ^ 0
-						else:
-							ciphertext[i] = plaintext[i] ^ output[i]
-					for k in range(end-start):
-						cipherOut.append(ciphertext[k])
-					iput = ciphertext
-				elif mode == self.modeOfOperation["OFB"]:
-					if firstRound:
-						output = self.aes.encrypt(IV, key, size)
-						firstRound = False
-					else:
-						output = self.aes.encrypt(iput, key, size)
-					for i in range(16):
-						if len(plaintext)-1 < i:
-							ciphertext[i] = 0 ^ output[i]
-						elif len(output)-1 < i:
-							ciphertext[i] = plaintext[i] ^ 0
-						elif len(plaintext)-1 < i and len(output) < i:
-							ciphertext[i] = 0 ^ 0
-						else:
-							ciphertext[i] = plaintext[i] ^ output[i]
-					for k in range(end-start):
-						cipherOut.append(ciphertext[k])
-					iput = output
-				elif mode == self.modeOfOperation["CBC"]:
-					for i in range(16):
-						if firstRound:
-							iput[i] =  plaintext[i] ^ IV[i]
-						else:
-							iput[i] =  plaintext[i] ^ ciphertext[i]
-					# print('IP@%s:%s' % (j, iput))
-					firstRound = False
-					ciphertext = self.aes.encrypt(iput, key, size)
-					# always 16 bytes because of the padding for CBC
-					for k in range(16):
-						cipherOut.append(ciphertext[k])
-		return mode, len(stringIn), cipherOut
-
-	# Mode of Operation Decryption
-	# cipherIn - Encrypted String
-	# originalsize - The unencrypted string length - required for CBC
-	# mode - mode of type modeOfOperation
-	# key - a number array of the bit length size
-	# size - the bit length of the key
-	# IV - the 128 bit number array Initilization Vector
-	def decrypt(self, cipherIn, originalsize, mode, key, size, IV):
-		# cipherIn = unescCtrlChars(cipherIn)
-		if len(key) % size:
-			return None
-		if len(IV) % 16:
-			return None
-		# the AES input/output
-		ciphertext = []
-		iput = []
-		output = []
-		plaintext = [0] * 16
-		# the output plain text string
-		stringOut = b''
-		# char firstRound
-		firstRound = True
-		if cipherIn != None:
-			for j in range(int(math.ceil(float(len(cipherIn))//16))):
-				start = j*16
-				end = j*16+16
-				if j*16+16 > len(cipherIn):
-					end = len(cipherIn)
-				ciphertext = cipherIn[start:end]
-				if mode == self.modeOfOperation["CFB"]:
-					if firstRound:
-						output = self.aes.encrypt(IV, key, size)
-						firstRound = False
-					else:
-						output = self.aes.encrypt(iput, key, size)
-					for i in range(16):
-						if len(output)-1 < i:
-							plaintext[i] = 0 ^ ciphertext[i]
-						elif len(ciphertext)-1 < i:
-							plaintext[i] = output[i] ^ 0
-						elif len(output)-1 < i and len(ciphertext) < i:
-							plaintext[i] = 0 ^ 0
-						else:
-							plaintext[i] = output[i] ^ ciphertext[i]
-					for k in range(end-start):
-						stringOut += chrsix(plaintext[k])
-					iput = ciphertext
-				elif mode == self.modeOfOperation["OFB"]:
-					if firstRound:
-						output = self.aes.encrypt(IV, key, size)
-						firstRound = False
-					else:
-						output = self.aes.encrypt(iput, key, size)
-					for i in range(16):
-						if len(output)-1 < i:
-							plaintext[i] = 0 ^ ciphertext[i]
-						elif len(ciphertext)-1 < i:
-							plaintext[i] = output[i] ^ 0
-						elif len(output)-1 < i and len(ciphertext) < i:
-							plaintext[i] = 0 ^ 0
-						else:
-							plaintext[i] = output[i] ^ ciphertext[i]
-					for k in range(end-start):
-						stringOut += chrsix(plaintext[k])
-					iput = output
-				elif mode == self.modeOfOperation["CBC"]:
-					output = self.aes.decrypt(ciphertext, key, size)
-					for i in range(16):
-						if firstRound:
-							plaintext[i] = IV[i] ^ output[i]
-						else:
-							plaintext[i] = iput[i] ^ output[i]
-					firstRound = False
-					if not(originalsize is None) and originalsize < end:
-						for k in range(originalsize-start):
-							stringOut += chrsix(plaintext[k])
-					else:
-						for k in range(end-start):
-							stringOut += chrsix(plaintext[k])
-					iput = ciphertext
-		return stringOut
-
-######################
-# end of aes.py code #
-######################
-
-###################################
-# pywallet crypter implementation #
-###################################
-
-class Crypter_pycrypto( object ):
-	def SetKeyFromPassphrase(self, vKeyData, vSalt, nDerivIterations, nDerivationMethod):
-		if nDerivationMethod != 0:
-			return 0
-		data = str_to_bytes(vKeyData) + vSalt
-		for i in xrange(nDerivIterations):
-			data = hashlib.sha512(data).digest()
-		self.SetKey(data[0:32])
-		self.SetIV(data[32:32+16])
-		return len(data)
-
-	def SetKey(self, key):
-		self.chKey = key
-
-	def SetIV(self, iv):
-		self.chIV = iv[0:16]
-
-	def Encrypt(self, data):
-		return AES.new(self.chKey,AES.MODE_CBC,self.chIV).encrypt(append_PKCS7_padding(data))
-
-	def Decrypt(self, data):
-		return AES.new(self.chKey,AES.MODE_CBC,self.chIV).decrypt(data)[0:32]
-
-class Crypter_ssl(object):
-	def __init__(self):
-		self.chKey = ctypes.create_string_buffer (32)
-		self.chIV = ctypes.create_string_buffer (16)
-
-	def SetKeyFromPassphrase(self, vKeyData, vSalt, nDerivIterations, nDerivationMethod):
-		if nDerivationMethod != 0:
-			return 0
-		strKeyData = ctypes.create_string_buffer (vKeyData)
-		chSalt = ctypes.create_string_buffer (vSalt)
-		return ssl.EVP_BytesToKey(ssl.EVP_aes_256_cbc(), ssl.EVP_sha512(), chSalt, strKeyData,
-			len(vKeyData), nDerivIterations, ctypes.byref(self.chKey), ctypes.byref(self.chIV))
-
-	def SetKey(self, key):
-		self.chKey = ctypes.create_string_buffer(key)
-
-	def SetIV(self, iv):
-		self.chIV = ctypes.create_string_buffer(iv)
-
-	def Encrypt(self, data):
-		buf = ctypes.create_string_buffer(len(data) + 16)
-		written = ctypes.c_int(0)
-		final = ctypes.c_int(0)
-		ctx = ssl.EVP_CIPHER_CTX_new()
-		ssl.EVP_CIPHER_CTX_init(ctx)
-		ssl.EVP_EncryptInit_ex(ctx, ssl.EVP_aes_256_cbc(), None, self.chKey, self.chIV)
-		ssl.EVP_EncryptUpdate(ctx, buf, ctypes.byref(written), data, len(data))
-		output = buf.raw[:written.value]
-		ssl.EVP_EncryptFinal_ex(ctx, buf, ctypes.byref(final))
-		output += buf.raw[:final.value]
-		return output
-
-	def Decrypt(self, data):
-		buf = ctypes.create_string_buffer(len(data) + 16)
-		written = ctypes.c_int(0)
-		final = ctypes.c_int(0)
-		ctx = ssl.EVP_CIPHER_CTX_new()
-		ssl.EVP_CIPHER_CTX_init(ctx)
-		ssl.EVP_DecryptInit_ex(ctx, ssl.EVP_aes_256_cbc(), None, self.chKey, self.chIV)
-		ssl.EVP_DecryptUpdate(ctx, buf, ctypes.byref(written), data, len(data))
-		output = buf.raw[:written.value]
-		ssl.EVP_DecryptFinal_ex(ctx, buf, ctypes.byref(final))
-		output += buf.raw[:final.value]
-		return output
-
-class Crypter_pure(object):
-	def __init__(self):
-		self.m = AESModeOfOperation()
-		self.cbc = self.m.modeOfOperation["CBC"]
-		self.sz = self.m.aes.keySize["SIZE_256"]
-
-	def SetKeyFromPassphrase(self, vKeyData, vSalt, nDerivIterations, nDerivationMethod):
-		if nDerivationMethod != 0:
-			return 0
-		data = str_to_bytes(vKeyData) + vSalt
-		for i in xrange(nDerivIterations):
-			data = hashlib.sha512(data).digest()
-		self.SetKey(data[0:32])
-		self.SetIV(data[32:32+16])
-		return len(data)
-
-	def SetKey(self, key):
-		self.chKey = [ordsix(i) for i in key]
-
-	def SetIV(self, iv):
-		self.chIV = [ordsix(i) for i in iv]
-
-	def Encrypt(self, data):
-		mode, size, cypher = self.m.encrypt(append_PKCS7_padding(data), self.cbc, self.chKey, self.sz, self.chIV)
-		return b''.join(map(chrsix, cypher))
-
-	def Decrypt(self, data):
-		chData = [ordsix(i) for i in data]
-		return self.m.decrypt(chData, self.sz, self.cbc, self.chKey, self.sz, self.chIV)
-
-crypter = None
-if crypter is None:
-	try:
-		from Crypto.Cipher import AES
-		crypter = Crypter_pycrypto()
-	except:
-		try:
-			import ctypes
-			import ctypes.util
-			ssl = ctypes.cdll.LoadLibrary (ctypes.util.find_library ('ssl') or 'libeay32')
-			crypter = Crypter_ssl()
-		except:
-			crypter = Crypter_pure()
-			logging.warning("pycrypto or libssl not found, decryption may be slow")
-
-
-##########################################
-# end of pywallet crypter implementation #
-##########################################
-
 def bytes_to_int(bytes):
 	result = 0
 	for b in bytes:
 		result = result * 256 + ordsix(b)
 	return result
-
-def int_to_bytes(value, length = None):
-	if not length and value == 0:
-		result = [0]
-	else:
-		result = []
-		for i in range(0, length or 1+int(math.log(value, 2**8))):
-			result.append(value >> (i * 8) & 0xff)
-		result.reverse()
-	return str(bytearray(result))
 
 # secp256k1
 
@@ -1277,11 +486,11 @@ class Private_key( object ):
 		return Signature( r, s )
 
 class EC_KEY(object):
-	def __init__( self, secret ):
-		curve = CurveFp( _p, _a, _b )
-		generator = Point( curve, _Gx, _Gy, _r )
-		self.pubkey = Public_key( generator, generator * secret )
-		self.privkey = Private_key( self.pubkey, secret )
+	def __init__(self, secret ):
+		curve = CurveFp(_p, _a, _b )
+		generator = Point(curve, _Gx, _Gy, _r )
+		self.pubkey = Public_key(generator, generator * secret )
+		self.privkey = Private_key(self.pubkey, secret )
 		self.secret = secret
 
 # end of python-ecdsa code
@@ -1508,7 +717,7 @@ def deserialize_CAddress(d):
 def parse_BlockLocator(vds):
 	d = Bdict({ 'hashes' : [] })
 	nHashes = vds.read_compact_size()
-	for i in xrange(nHashes):
+	for i in range(nHashes):
 		d['hashes'].append(vds.read_bytes(32))
 		return d
 
@@ -1527,6 +736,7 @@ def parse_setting(setting, vds):
 	elif setting == "nLimitProcessors":
 		return vds.read_int32()
 	return 'unknown setting'
+
 
 class SerializationError(Exception):
 	""" Thrown when there's a problem deserializing or serializing """
@@ -1604,6 +814,7 @@ def multiextract(s, ll):
 	if s[cursor:]!=b'':
 		r.append(s[cursor:])
 	return r
+
 
 class RecovCkey(object):
 	def __init__(self, epk, pk):
@@ -1691,7 +902,6 @@ def recov_uckeyOLD(fd, offset):
 	else:
 		return None
 
-
 	if sum(map(lambda x:int(me[x[0]] != binascii.unhexlify(x[1])), checks)):  #number of false statements
 		return None
 
@@ -1706,7 +916,6 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 		'ckey':b'\x27\x00\x01\x04ckey',
 		'key':b'\x00\x01\x03key'
 	}
-
 
 	if not device.startswith('PartialRecoveryFile:'):
 		r=search_patterns_on_disk(device, size, inc, nameToDBName.values())
@@ -1723,13 +932,11 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 		device=r['PRFdevice']
 		print("\nLoaded %.1f Go from %s\n"%(r['PRFsize']//1e9, device))
 
-
 	try:
 		otype=os.O_RDONLY|os.O_BINARY
 	except:
 		otype=os.O_RDONLY
 	fd = os.open(device, otype)
-
 
 	mkeys=[]
 	crypters=[]
@@ -1749,9 +956,6 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 
 	print("Found %d possible wallets"%len(mkeys))
 
-
-
-
 	ckeys=[]
 	for offset in r[repr(nameToDBName['ckey'])]:
 		s=recov_ckey(fd, offset)
@@ -1761,7 +965,6 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 		ckeys.append([offset,newckey])
 	print('Found %d possible encrypted keys'%len(ckeys))
 
-
 	uckeys=[]
 	for offset in r[repr(nameToDBName['key'])]:
 		s=recov_uckey(fd, offset)
@@ -1770,9 +973,7 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 	uckeys = list(set(uckeys))
 	print('Found %d possible unencrypted keys'%len(uckeys))
 
-
 	os.close(fd)
-
 
 	list_of_possible_keys_per_master_key=dict(map(lambda x:[x[1],[]], mkeys))
 	for cko,ck in ckeys:
@@ -1812,7 +1013,6 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 					secret = crypter.Decrypt(ck.encrypted_pk)
 					compressed = ck.public_key[0] != '\04'
 
-
 					pkey = EC_KEY(int(b'0x' + binascii.hexlify(secret), 16))
 					if ck.public_key != GetPubKey(pkey, compressed):
 						failures_in_a_row+=1
@@ -1839,9 +1039,9 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 		else:
 			print("Private keys not decrypted: %d"%len(ckeys_not_decrypted))
 			print("Trying all the remaining possibilities (%d) might take up to %d minutes."%(len(ckeys_not_decrypted)*len(passes)*len(mkeys),int(len(ckeys_not_decrypted)*len(passes)*len(mkeys)//calcspeed)))
-			cont=raw_input("Do you want to test them? (y/n): ")
+			cont=input("Do you want to test them? (y/n): ")
 			while len(cont)==0:
-				cont=raw_input("Do you want to test them? (y/n): ")
+				cont=input("Do you want to test them? (y/n): ")
 				if cont[0]=='y':
 					refused_to_test_all_pps=False
 					cpt=0
@@ -1862,7 +1062,6 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 								secret = crypter.Decrypt(ck.encrypted_pk)
 								compressed = ck.public_key[0] != '\04'
 
-
 								pkey = EC_KEY(int(b'0x' + binascii.hexlify(secret), 16))
 								if ck.public_key == GetPubKey(pkey, compressed):
 									ck.mkey=mk
@@ -1870,21 +1069,17 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 								cpt+=1
 
 		print("")
-		ckeys_not_decrypted=filter(lambda x:x[1].privkey==None, ckeys)
+		ckeys_not_decrypted=list(filter(lambda x:x[1].privkey==None, ckeys))
 		if len(ckeys_not_decrypted)==0:
 			print("All the found encrypted private keys have been finally decrypted.")
 		elif not refused_to_test_all_pps:
 			print("Private keys not decrypted: %d"%len(ckeys_not_decrypted))
 			print("Try another password, check the size of your partition or seek help")
 
-
 	uncrypted_ckeys=filter(lambda x:x!=None, map(lambda x:x[1].privkey, ckeys))
 	uckeys.extend(uncrypted_ckeys)
 
 	return uckeys
-
-
-
 
 def ts():
 	return int(time.mktime(datetime.now().timetuple()))
@@ -1951,7 +1146,7 @@ def first_read(device, size, prekeys, inc=10000):
 def shrink_intervals(device, ranges, prekeys, inc=1000):
 	prekey = prekeys[0]
 	nranges = []
-	fd = os.open (device, os.O_RDONLY)
+	fd = os.open(device, os.O_RDONLY)
 	for j in range(len(ranges)//2):
 		before_contained_key = False
 		contains_key = False
@@ -1969,7 +1164,6 @@ def shrink_intervals(device, ranges, prekeys, inc=1000):
 			mini_blocks[2*k] -= len(prekey) +1
 			mini_blocks[2*k+1] += len(prekey) +1
 
-
 			bi = mini_blocks[2*k]
 			bf = mini_blocks[2*k+1]
 
@@ -1986,7 +1180,7 @@ def shrink_intervals(device, ranges, prekeys, inc=1000):
 
 			before_contained_key = contains_key
 
-	os.close (fd)
+	os.close(fd)
 
 	return nranges
 
@@ -2035,21 +1229,6 @@ def read_device_size(size):
 	n, prefix, bi = re.match(r'(\d+)(|k|M|G|T|P)(i?)[oB]?$', size).groups()
 	r = int(int(n) * pow(1000+int(bool(bi))*24, 'zkMGTP'.index(prefix or 'z')))
 	return r
-
-def md5_2(a):
-	return hashlib.md5(a).digest()
-
-def md5_file(nf):
-	try:
-		fichier = file(nf, 'r').read()
-		return md5_2(fichier)
-	except:
-		return 'zz'
-
-def md5_onlinefile(add):
-	page = urllib.urlopen(add).read()
-	return md5_2(page)
-
 
 class KEY:
 	def __init__ (self):
@@ -2101,7 +1280,7 @@ class KEY:
 			der.encode_octet_string (encoded_gxgy),
 			der.encode_integer (_r),
 			der.encode_integer (1),
-		);
+		)
 		encoded_vk = "\x00\x04" + self.pubkey.to_string ()
 		return der.encode_sequence (
 			der.encode_integer (1),
@@ -2207,7 +1386,7 @@ class BCDataStream(object):
 		if size < 0:
 			raise SerializationError("attempt to write size < 0")
 		elif size < 253:
-			 self.write(chrsix(size))
+			self.write(chrsix(size))
 		elif size < 2**16:
 			self.write('\xfd')
 			self._write_num('<H', size)
@@ -2250,7 +1429,6 @@ def parse_wallet(db, item_callback):
 	kds = BCDataStream()
 	vds = BCDataStream()
 
-
 	def parse_TxIn(vds):
 		d = Bdict({})
 		d['prevout_hash'] = binascii.hexlify(vds.read_bytes(32))
@@ -2259,13 +1437,11 @@ def parse_wallet(db, item_callback):
 		d['sequence'] = vds.read_uint32()
 		return d
 
-
 	def parse_TxOut(vds):
 		d = Bdict({})
 		d['value'] = vds.read_int64()//1e8
 		d['scriptPubKey'] = binascii.hexlify(vds.read_bytes(vds.read_compact_size()))
 		return d
-
 
 	for (key, value) in db.items():
 		d = Bdict({})
@@ -2286,11 +1462,11 @@ def parse_wallet(db, item_callback):
 				d['version'] = vds.read_int32()
 				n_vin = vds.read_compact_size()
 				d['txIn'] = []
-				for i in xrange(n_vin):
+				for i in range(n_vin):
 					d['txIn'].append(parse_TxIn(vds))
 				n_vout = vds.read_compact_size()
 				d['txOut'] = []
-				for i in xrange(n_vout):
+				for i in range(n_vout):
 					d['txOut'].append(parse_TxOut(vds))
 				d['lockTime'] = vds.read_uint32()
 				d['tx'] = binascii.hexlify(vds.input[start:vds.read_cursor])
@@ -2334,9 +1510,9 @@ def parse_wallet(db, item_callback):
 				d['nTime'] = vds.read_int64()
 				d['otherAccount'] = vds.read_string()
 				d['comment'] = vds.read_string()
-			# elif type == b"bestblock":
-			# 	d['nVersion'] = vds.read_int32()
-			# 	d.update(parse_BlockLocator(vds))
+			elif type == b"bestblock":
+				d['nVersion'] = vds.read_int32()
+				d.update(parse_BlockLocator(vds))
 			elif type == b"ckey":
 				d['public_key'] = kds.read_bytes(kds.read_compact_size())
 				d['encrypted_private_key'] = vds.read_bytes(vds.read_compact_size())
@@ -2586,11 +1762,11 @@ def update_wallet(db, types, datas, paramsAreLists=False):
 				vds.write_int64(d['nTime'])
 				vds.write_string(d['otherAccount'])
 				vds.write_string(d['comment'])
-			# elif type == b"bestblock":
-			# 	vds.write_int32(d['nVersion'])
-			# 	vds.write_compact_size(len(d['hashes']))
-			# 	for h in d['hashes']:
-			# 		vds.write(h)
+			elif type == b"bestblock":
+				vds.write_int32(d['nVersion'])
+				vds.write_compact_size(len(d['hashes']))
+				for h in d['hashes']:
+					vds.write(h)
 			elif type == b"ckey":
 				kds.write_string(d['public_key'])
 				vds.write_string(d['encrypted_private_key'])
@@ -2629,7 +1805,6 @@ def create_new_wallet(db_env, walletfile, version):
 
 	db_out.close()
 
-
 def rewrite_wallet(db_env, walletfile, destFileName, pre_put_callback=None):
 	db = open_wallet(db_env, walletfile)
 
@@ -2659,9 +1834,7 @@ addr_to_keys={}
 def read_wallet(json_db, db_env, walletfile, print_wallet, print_wallet_transactions, transaction_filter, include_balance, FillPool=False):
 	global passphrase, addr_to_keys
 	crypted=False
-
 	private_keys = []
-	private_hex_keys = []
 
 	db = open_wallet(db_env, walletfile, writable=FillPool)
 
@@ -2686,7 +1859,7 @@ def read_wallet(json_db, db_env, walletfile, print_wallet, print_wallet_transact
 			json_db['minversion'] = d['minversion']
 
 		elif type == b"setting":
-			if not json_db.has_key('settings'):
+			if 'settings' not in json_db.keys():
 				json_db['settings'] = Bdict({})
 			json_db["settings"][d['setting']] = d['value']
 
@@ -2703,7 +1876,8 @@ def read_wallet(json_db, db_env, walletfile, print_wallet, print_wallet_transact
 			json_db['keys'].append({'addr' : addr, 'sec' : sec, 'hexsec' : hexsec, 'secret' : hexsec, 'pubkey':binascii.hexlify(d['public_key']), 'compressed':compressed, 'private':binascii.hexlify(d['private_key'])})
 
 		elif type == b"wkey":
-			if not json_db.has_key('wkey'): json_db['wkey'] = []
+			if 'wkey' not in json_db.keys():
+				json_db['wkey'] = []
 			json_db['wkey']['created'] = d['created']
 
 		elif type == b"pool":
@@ -2723,8 +1897,8 @@ def read_wallet(json_db, db_env, walletfile, print_wallet, print_wallet_transact
 		elif type == b"acentry":
 			json_db['acentry'] = (d['account'], d['nCreditDebit'], d['otherAccount'], time.ctime(d['nTime']), d['n'], d['comment'])
 
-		# elif type == b"bestblock":
-		# 	json_db['bestblock'] = binascii.hexlify(d['hashes'][0][::-1])
+		elif type == b"bestblock":
+			json_db['bestblock'] = binascii.hexlify(d['hashes'][0][::-1])
 
 		elif type == b"ckey":
 			crypted=True
@@ -2755,7 +1929,6 @@ def read_wallet(json_db, db_env, walletfile, print_wallet, print_wallet_transact
 	list_of_reserve_not_in_pool=[]
 	parse_wallet(db, item_callback)
 
-
 	nkeys = len(json_db['keys'])
 	i = 0
 	for k in json_db['keys']:
@@ -2773,7 +1946,6 @@ def read_wallet(json_db, db_env, walletfile, print_wallet, print_wallet_transact
 			k["reserve"] = 1
 			list_of_reserve_not_in_pool.append(k['pubkey'])
 
-
 	def rnip_callback(a):
 		list_of_reserve_not_in_pool.remove(a['public_key_hex'])
 
@@ -2784,8 +1956,6 @@ def read_wallet(json_db, db_env, walletfile, print_wallet, print_wallet_transact
 		for p in list_of_reserve_not_in_pool:
 			update_wallet(db, 'pool', { 'public_key' : binascii.unhexlify(p), 'n' : cpt, 'nTime' : ts(), 'nVersion':80100 })
 			cpt+=1
-
-
 
 	db.close()
 
@@ -2807,7 +1977,6 @@ def read_wallet(json_db, db_env, walletfile, print_wallet, print_wallet_transact
 				crypter.SetIV(Hash(public_key))
 				secret = crypter.Decrypt(ckey)
 				compressed = public_key[0] != '\04'
-
 
 				if check:
 					check = False
@@ -2847,10 +2016,6 @@ def parse_private_key(sec, force_compressed=None):
 		compressed = as_compressed(is_compressed(sec))
 	except:
 		pkey = None
-		try:
-			binascii.unhexlify(sec)
-		except:
-			pass
 	if not pkey:
 		if len(sec) == 64:
 			pkey = EC_KEY(str_to_long(binascii.unhexlify(sec)))
@@ -2859,18 +2024,18 @@ def parse_private_key(sec, force_compressed=None):
 			pkey = EC_KEY(str_to_long(binascii.unhexlify(sec[:-2])))
 			compressed = as_compressed(True)
 		else:
-			warnings.warn("Hexadecimal private keys must be 64 or 66 characters long (specified one is "+str(len(sec))+" characters long)")
+			logging.warning("Hexadecimal private keys must be 64 or 66 characters long (specified one is "+str(len(sec))+" characters long)")
 			if len(sec)<64:
 				compressed = as_compressed(False)
-				warnings.warn("Padding with zeroes, %scompressed"%('un' if not compressed else ''))
+				logging.warning("Padding with zeroes, %scompressed"%('un' if not compressed else ''))
 				try:
 					pkey = EC_KEY(str_to_long(binascii.unhexlify('0'*(64-len(sec)) + sec)))
 				except Exception as e:
-					warnings.warn(e)
+					logging.warning(e)
 					raise Exception("Failed padding with zeroes")
 			elif len(sec)>66:
 				compressed = as_compressed(False)
-				warnings.warn("Keeping first 64 characters, %scompressed"%('un' if not compressed else ''))
+				logging.warning("Keeping first 64 characters, %scompressed"%('un' if not compressed else ''))
 				pkey = EC_KEY(str_to_long(binascii.unhexlify(sec[:64])))
 			else:
 				raise Exception("Error")
@@ -2922,11 +2087,11 @@ def keyinfo(sec, network=None, print_info=False, force_compressed=None):
 			print("Privkey unavailable: unknown network WIF prefix")
 		print("Hexprivkey:          %s"%bytes_to_str(binascii.hexlify(secret)))
 		if compressed:
-			warnings.warn("    For compressed keys, the hexadecimal private key sometimes contains an extra '01' at the end")
+			logging.warning("    For compressed keys, the hexadecimal private key sometimes contains an extra '01' at the end")
 		print("Hash160:             %s"%bytes_to_str(binascii.hexlify(h160)))
 		print("Pubkey:              %s"%bytes_to_str(binascii.hexlify(ser_public_key)))
 		if int(binascii.hexlify(secret), 16)>_r:
-			warnings.warn('/!\\ Beware, 0x%s is equivalent to 0x%.33x'%(binascii.hexlify(secret), int(binascii.hexlify(secret), 16)-_r))
+			logging.warning('/!\\ Beware, 0x%s is equivalent to 0x%.33x'%(binascii.hexlify(secret), int(binascii.hexlify(secret), 16)-_r))
 
 	r = KeyInfo(secret, private_key, ser_public_key, uncompressed_ser_public_key, addr, wif, compressed)
 	if network:
@@ -2970,15 +2135,14 @@ def importprivkey(db, sec, label, reserve, verbose=True):
 	if not reserve:
 		update_wallet(db, 'name', { 'hash' : addr, 'name' : label })
 
-
 	return True
 
 def balance(site, address):
-	page=urllib.urlopen("%s%s" % (site, address))
+	page=urllib.request.urlopen("%s%s" % (site, address))
 	query_result=page.read()
 	#If the initial API call returned an error, use a secondary API
 	if query_result.startswith("error"):
-		page = urllib.urlopen("%s%s" % (backup_balance_site, address))
+		page = urllib.request.urlopen("%s%s" % (backup_balance_site, address))
 		query_result = json.loads(page.read())["balance"]
 	return query_result
 
@@ -3067,7 +2231,6 @@ def verify_message_signature(pubkey, sign, msg, msgIsHex=False):
 	k.set_pubkey(binascii.unhexlify(pubkey))
 	return k.verify(message_to_hash(msg, msgIsHex), binascii.unhexlify(sign))
 
-
 OP_DUP = 118;
 OP_HASH160 = 169;
 OP_EQUALVERIFY = 136;
@@ -3116,7 +2279,6 @@ def ct(l_prevh, l_prevn, l_prevsig, l_prevpubkey, l_value_out, l_pubkey_out, is_
 
 		ret += txin_ret
 		ret += "ffffffff"
-
 
 	nvout = len(l_value_out)
 	ret += "%02x"%nvout
@@ -3216,7 +2378,7 @@ def bc_address_to_available_tx(address, testnet=False):
 	balance = 0
 	txin_is_used = Bdict({})
 
-	page = urllib.urlopen("%s/%s" % (blockexplorer_url, address))
+	page = urllib.request.urlopen("%s/%s" % (blockexplorer_url, address))
 	try:
 		table = page.read().split('<table class="txtable">')[1]
 		table = table.split("</table>")[0]
@@ -3253,9 +2415,8 @@ def bc_address_to_available_tx(address, testnet=False):
 
 		balance = round(float(cell[i][5]), 8)
 
-
 	for tx in txout:
-		pagetx = urllib.urlopen("http://blockexplorer.com/"+TN+"/tx/"+tx[0])
+		pagetx = urllib.request.urlopen("http://blockexplorer.com/"+TN+"/tx/"+tx[0])
 		table_in = pagetx.read().split('<a name="outputs">Outputs</a>')[0].split('<table class="txtable">')[1].split("</table>")[0]
 
 		cell = read_blockexplorer_table(table_in)
@@ -3276,28 +2437,28 @@ def bc_address_to_available_tx(address, testnet=False):
 empty_txin=Bdict({'hash':'', 'index':'', 'sig':'##', 'pubkey':'', 'oldscript':'', 'addr':''})
 empty_txout=Bdict({'amount':'', 'script':''})
 
-class tx():
+class tx:
 	ins=[]
 	outs=[]
 	tosign=False
 
-	def hashtypeone(index,script):
+	def hashtypeone(self, index, script):
 		global empty_txin
-		for i in range(len(ins)):
+		for i in range(len(self.ins)):
 			self.ins[i]=empty_txin
 		self.ins[index]['pubkey']=""
-		self.ins[index]['oldscript']=s
+		self.ins[index]['oldscript']=script
 		self.tosign=True
 
-	def copy():
+	def copy(self):
 		r=tx()
 		r.ins=self.ins[:]
 		r.outs=self.outs[:]
 		return r
 
-	def sign(n=-1):
+	def sign(self, n=-1):
 		if n==-1:
-			for i in range(len(ins)):
+			for i in range(len(self.ins)):
 				self.sign(i)
 				return "done"
 
@@ -3315,20 +2476,20 @@ class tx():
 
 		self.ins[n]['sig']=sign_message(binascii.unhexlify(sec), txcopy.get_tx(), True)
 
-	def ser():
+	def ser(self):
 		r=Bdict({})
 		r['ins']=self.ins
 		r['outs']=self.outs
 		r['tosign']=self.tosign
 		return json.dumps(r)
 
-	def unser(r):
+	def unser(self, r):
 		s=json.loads(r)
 		self.ins=s['ins']
 		self.outs=s['outs']
 		self.tosign=s['tosign']
 
-	def get_tx():
+	def get_tx(self):
 		r=''
 		ret += inverse_str("%08x"%1)
 		ret += "%02x"%len(self.ins)
@@ -3381,17 +2542,6 @@ class tx():
 			ret += "01000000"
 		return ret
 
-
-def update_pyw():
-	if md5_last_pywallet[0] and md5_last_pywallet[1] not in md5_pywallet:
-		dl=urllib.urlopen('https://raw.github.com/jackjack-jj/pywallet/master/pywallet.py').read()
-		if len(dl)>40 and md5_2(dl)==md5_last_pywallet[1]:
-			filout = open(pyw_path+"/"+pyw_filename, 'w')
-			filout.write(dl)
-			filout.close()
-		else:
-			return "Problem when downloading new version ("+md5_2(dl)+"/"+md5_last_pywallet[1]+")"
-
 def clone_wallet(parentPath, clonePath):
 	types,datas=[],[]
 	parentdir,parentname=os.path.split(parentPath)
@@ -3441,14 +2591,6 @@ def clone_wallet(parentPath, clonePath):
 	db.close()
 	print("Wallet successfully cloned to:\n   %s"%clonePath)
 
-md5_last_pywallet = [False, ""]
-
-def retrieve_last_pywallet_md5():
-	global md5_last_pywallet
-	md5_last_pywallet = [True, md5_onlinefile('https://raw.github.com/jackjack-jj/pywallet/master/pywallet.py')]
-
-from optparse import OptionParser
-
 def bech32_polymod(values):
 	GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
 	chk = 1
@@ -3475,7 +2617,7 @@ BASE32_ALPH='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
 
 def witprog_to_bech32_addr(witprog, network, witv=0):
 	x = base64.b32encode(witprog)
-	if PY3:x = x.decode()
+	x = x.decode()
 	x = x.replace('=', '')
 	data = [witv]+list(map(lambda y:BASE32_ALPH.index(y), x))
 	combined = data + bech32_create_checksum(network.segwit_hrp, data)
@@ -3485,30 +2627,6 @@ def witprog_to_bech32_addr(witprog, network, witv=0):
 def p2sh_script_to_addr(script):
 	version=5
 	return hash_160_to_bc_address(hash_160(script), version)
-
-def whitepaper():
-	try:
-		rawtx = subprocess.check_output(["bitcoin-cli", "getrawtransaction", "54e48e5f5c656b26c3bca14a8c95aa583d07ebe84dde3b7dd4a78f4e4186e713"])
-	except:
-		rawtx = urllib.urlopen("https://blockchain.info/tx/54e48e5f5c656b26c3bca14a8c95aa583d07ebe84dde3b7dd4a78f4e4186e713?format=hex").read()
-	outputs = rawtx.split("0100000000000000")
-	pdf = b""
-	for output in outputs[1:-2]:
-		i = 6
-		pdf += binascii.unhexlify(output[i:i+130])
-		i += 132
-		pdf += binascii.unhexlify(output[i:i+130])
-		i += 132
-		pdf += binascii.unhexlify(output[i:i+130])
-	pdf += binascii.unhexlify(outputs[-2][6:-4])
-	content = pdf[8:-8]
-	assert hashlib.sha256(content).hexdigest() == 'b1674191a88ec5cdd733e4240a81803105dc412d6c6708d53ab94fc248f4f553'
-	filename = 'bitcoin_whitepaper'
-	while os.path.exists(filename+'.pdf'):
-		filename += '_'
-	with open(filename+'.pdf', "wb") as f:
-		f.write(content)
-	print("Wrote the Bitcoin whitepaper to %s.pdf"%filename)
 
 bip39_wordlist = '''
  abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress actual adapt add addict address adjust admit adult advance advice aerobic affair afford afraid again age agent agree ahead aim air
@@ -3560,151 +2678,151 @@ bip39_wordlist = '''
 
 PBKDF2_ROUNDS = 2048
 def binary_search(a, x, lo, hi):
-    hi = hi if hi is not None else len(a)
-    pos = bisect.bisect_left(a, x, lo, hi)
-    return pos if pos != hi and a[pos] == x else -1
+	hi = hi if hi is not None else len(a)
+	pos = bisect.bisect_left(a, x, lo, hi)
+	return pos if pos != hi and a[pos] == x else -1
 
 class Mnemonic(object):
-    def __init__(self):
-        self.language = "english"
-        self.radix = 2048
-        self.wordlist = bip39_wordlist
-        if len(self.wordlist) != self.radix:
-            raise ValueError("Wordlist should contain {} words, but it's {} words long instead.".format(self.radix, len(self.wordlist)))
+	def __init__(self):
+		self.language = "english"
+		self.radix = 2048
+		self.wordlist = bip39_wordlist
+		if len(self.wordlist) != self.radix:
+			raise ValueError("Wordlist should contain {} words, but it's {} words long instead.".format(self.radix, len(self.wordlist)))
 
-    @staticmethod
-    def normalize_string(txt):
-        if isinstance(txt, bytes):
-            utxt = txt.decode("utf8")
-        elif isinstance(txt, str):
-            utxt = txt
-        else:
-            raise TypeError("String value expected")
-        return unicodedata.normalize("NFKD", utxt)
+	@staticmethod
+	def normalize_string(txt):
+		if isinstance(txt, bytes):
+			utxt = txt.decode("utf8")
+		elif isinstance(txt, str):
+			utxt = txt
+		else:
+			raise TypeError("String value expected")
+		return unicodedata.normalize("NFKD", utxt)
 
-    def generate(self, strength=128):
-        if strength not in [128, 160, 192, 224, 256]:
-            raise ValueError("Invalid strength value. Allowed values are [128, 160, 192, 224, 256].")
-        return self.to_mnemonic(os.urandom(strength // 8))
+	def generate(self, strength=128):
+		if strength not in [128, 160, 192, 224, 256]:
+			raise ValueError("Invalid strength value. Allowed values are [128, 160, 192, 224, 256].")
+		return self.to_mnemonic(os.urandom(strength // 8))
 
-    def to_entropy(self, words):
-        if not isinstance(words, list):
-            words = words.split(" ")
-        if len(words) not in [12, 15, 18, 21, 24]:
-            raise ValueError("Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (%d)."%len(words))
-        concatLenBits = len(words) * 11
-        concatBits = [False] * concatLenBits
-        wordindex = 0
-        if self.language == "english":
-            use_binary_search = True
-        else:
-            use_binary_search = False
-        for word in words:
-            ndx = (
-                binary_search(self.wordlist, word)
-                if use_binary_search
-                else self.wordlist.index(word)
-            )
-            if ndx < 0:
-                raise LookupError('Unable to find "%s" in word list.' % word)
-            for ii in range(11):
-                concatBits[(wordindex * 11) + ii] = (ndx & (1 << (10 - ii))) != 0
-            wordindex += 1
-        checksumLengthBits = concatLenBits // 33
-        entropyLengthBits = concatLenBits - checksumLengthBits
-        entropy = bytearray(entropyLengthBits // 8)
-        for ii in range(len(entropy)):
-            for jj in range(8):
-                if concatBits[(ii * 8) + jj]:
-                    entropy[ii] |= 1 << (7 - jj)
-        hashBytes = hashlib.sha256(entropy).digest()
-        hashBits = list(
-            itertools.chain.from_iterable(
-                [c & (1 << (7 - i)) != 0 for i in range(8)] for c in hashBytes
-            )
-        )
-        for i in range(checksumLengthBits):
-            if concatBits[entropyLengthBits + i] != hashBits[i]:
-                raise ValueError("Failed checksum.")
-        return entropy
+	def to_entropy(self, words):
+		if not isinstance(words, list):
+			words = words.split(" ")
+		if len(words) not in [12, 15, 18, 21, 24]:
+			raise ValueError("Number of words must be one of the following: [12, 15, 18, 21, 24], but it is not (%d)."%len(words))
+		concatLenBits = len(words) * 11
+		concatBits = [False] * concatLenBits
+		wordindex = 0
+		if self.language == "english":
+			use_binary_search = True
+		else:
+			use_binary_search = False
+		for word in words:
+			ndx = (
+				binary_search(self.wordlist, word)
+				if use_binary_search
+				else self.wordlist.index(word)
+			)
+			if ndx < 0:
+				raise LookupError('Unable to find "%s" in word list.' % word)
+			for ii in range(11):
+				concatBits[(wordindex * 11) + ii] = (ndx & (1 << (10 - ii))) != 0
+			wordindex += 1
+		checksumLengthBits = concatLenBits // 33
+		entropyLengthBits = concatLenBits - checksumLengthBits
+		entropy = bytearray(entropyLengthBits // 8)
+		for ii in range(len(entropy)):
+			for jj in range(8):
+				if concatBits[(ii * 8) + jj]:
+					entropy[ii] |= 1 << (7 - jj)
+		hashBytes = hashlib.sha256(entropy).digest()
+		hashBits = list(
+			itertools.chain.from_iterable(
+				[c & (1 << (7 - i)) != 0 for i in range(8)] for c in hashBytes
+			)
+		)
+		for i in range(checksumLengthBits):
+			if concatBits[entropyLengthBits + i] != hashBits[i]:
+				raise ValueError("Failed checksum.")
+		return entropy
 
-    def to_mnemonic(self, data):
-        if len(data) not in [16, 20, 24, 28, 32]:
-            raise ValueError("Data length should be one of the following: [16, 20, 24, 28, 32], but is {}.".format(len(data)))
-        h = hashlib.sha256(data).hexdigest()
-        b = (
-            bin(int.from_bytes(data, byteorder="big"))[2:].zfill(len(data) * 8)
-            + bin(int(h, 16))[2:].zfill(256)[: len(data) * 8 // 32]
-        )
-        result = []
-        for i in range(len(b) // 11):
-            idx = int(b[i * 11 : (i + 1) * 11], 2)
-            result.append(self.wordlist[idx])
-        if self.language == "japanese":
-            result_phrase = "\u3000".join(result)
-        else:
-            result_phrase = " ".join(result)
-        return result_phrase
+	def to_mnemonic(self, data):
+		if len(data) not in [16, 20, 24, 28, 32]:
+			raise ValueError("Data length should be one of the following: [16, 20, 24, 28, 32], but is {}.".format(len(data)))
+		h = hashlib.sha256(data).hexdigest()
+		b = (
+			bin(int.from_bytes(data, byteorder="big"))[2:].zfill(len(data) * 8)
+			+ bin(int(h, 16))[2:].zfill(256)[: len(data) * 8 // 32]
+		)
+		result = []
+		for i in range(len(b) // 11):
+			idx = int(b[i * 11 : (i + 1) * 11], 2)
+			result.append(self.wordlist[idx])
+		if self.language == "japanese":
+			result_phrase = "\u3000".join(result)
+		else:
+			result_phrase = " ".join(result)
+		return result_phrase
 
-    def check(self, mnemonic):
-        mnemonic_list = self.normalize_string(mnemonic).split(" ")
-        if len(mnemonic_list) not in [12, 15, 18, 21, 24]:
-            return False
-        try:
-            idx = map(lambda x: bin(self.wordlist.index(x))[2:].zfill(11), mnemonic_list)
-            b = "".join(idx)
-        except ValueError:
-            return False
-        l = len(b)  # noqa: E741
-        d = b[: l // 33 * 32]
-        h = b[-l // 33 :]
-        nd = int(d, 2).to_bytes(l // 33 * 4, byteorder="big")
-        nh = bin(int(hashlib.sha256(nd).hexdigest(), 16))[2:].zfill(256)[: l // 33]
-        return h == nh
+	def check(self, mnemonic):
+		mnemonic_list = self.normalize_string(mnemonic).split(" ")
+		if len(mnemonic_list) not in [12, 15, 18, 21, 24]:
+			return False
+		try:
+			idx = map(lambda x: bin(self.wordlist.index(x))[2:].zfill(11), mnemonic_list)
+			b = "".join(idx)
+		except ValueError:
+			return False
+		l = len(b)  # noqa: E741
+		d = b[: l // 33 * 32]
+		h = b[-l // 33 :]
+		nd = int(d, 2).to_bytes(l // 33 * 4, byteorder="big")
+		nh = bin(int(hashlib.sha256(nd).hexdigest(), 16))[2:].zfill(256)[: l // 33]
+		return h == nh
 
-    def expand_word(self, prefix):
-        if prefix in self.wordlist:
-            return prefix
-        else:
-            matches = [word for word in self.wordlist if word.startswith(prefix)]
-            if len(matches) == 1:  # matched exactly one word in the wordlist
-                return matches[0]
-            else:
-                return prefix
+	def expand_word(self, prefix):
+		if prefix in self.wordlist:
+			return prefix
+		else:
+			matches = [word for word in self.wordlist if word.startswith(prefix)]
+			if len(matches) == 1:  # matched exactly one word in the wordlist
+				return matches[0]
+			else:
+				return prefix
 
-    def expand(self, mnemonic):
-        return " ".join(map(self.expand_word, mnemonic.split(" ")))
+	def expand(self, mnemonic):
+		return " ".join(map(self.expand_word, mnemonic.split(" ")))
 
-    @classmethod
-    def to_seed(cls, mnemonic, passphrase = ""):
-        mnemonic = cls.normalize_string(mnemonic)
-        passphrase = cls.normalize_string(passphrase)
-        passphrase = "mnemonic" + passphrase
-        mnemonic_bytes = mnemonic.encode("utf-8")
-        passphrase_bytes = passphrase.encode("utf-8")
-        stretched = hashlib.pbkdf2_hmac("sha512", mnemonic_bytes, passphrase_bytes, PBKDF2_ROUNDS)
-        return stretched[:64]
+	@classmethod
+	def to_seed(cls, mnemonic, passphrase = ""):
+		mnemonic = cls.normalize_string(mnemonic)
+		passphrase = cls.normalize_string(passphrase)
+		passphrase = "mnemonic" + passphrase
+		mnemonic_bytes = mnemonic.encode("utf-8")
+		passphrase_bytes = passphrase.encode("utf-8")
+		stretched = hashlib.pbkdf2_hmac("sha512", mnemonic_bytes, passphrase_bytes, PBKDF2_ROUNDS)
+		return stretched[:64]
 
-    @classmethod
-    def mnemonic_to_xprv(cls, mnemonic, passphrase = ""):
-    	seed = cls.to_seed(mnemonic, passphrase)
-    	return Xpriv.from_seed(seed)
+	@classmethod
+	def mnemonic_to_xprv(cls, mnemonic, passphrase = ""):
+		seed = cls.to_seed(mnemonic, passphrase)
+		return Xpriv.from_seed(seed)
 
-    @staticmethod
-    def to_hd_master_key(seed, testnet = False):
-        if len(seed) != 64:
-            raise ValueError("Provided seed should have length of 64")
-        seed = hmac.new(b"Bitcoin seed", seed, digestmod=hashlib.sha512).digest()
-        xprv = b"\x04\x88\xad\xe4"  # Version for private mainnet
-        if testnet:
-            xprv = b"\x04\x35\x83\x94"  # Version for private testnet
-        xprv += b"\x00" * 9  # Depth, parent fingerprint, and child number
-        xprv += seed[32:]  # Chain code
-        xprv += b"\x00" + seed[:32]  # Master key
-        hashed_xprv = hashlib.sha256(xprv).digest()
-        hashed_xprv = hashlib.sha256(hashed_xprv).digest()
-        xprv += hashed_xprv[:4]
-        return b58encode(xprv)
+	@staticmethod
+	def to_hd_master_key(seed, testnet = False):
+		if len(seed) != 64:
+			raise ValueError("Provided seed should have length of 64")
+		seed = hmac.new(b"Bitcoin seed", seed, digestmod=hashlib.sha512).digest()
+		xprv = b"\x04\x88\xad\xe4"  # Version for private mainnet
+		if testnet:
+			xprv = b"\x04\x35\x83\x94"  # Version for private testnet
+		xprv += b"\x00" * 9  # Depth, parent fingerprint, and child number
+		xprv += seed[32:]  # Chain code
+		xprv += b"\x00" + seed[:32]  # Master key
+		hashed_xprv = hashlib.sha256(xprv).digest()
+		hashed_xprv = hashlib.sha256(hashed_xprv).digest()
+		xprv += hashed_xprv[:4]
+		return b58encode(xprv)
 
 bip39_mnemonic = Mnemonic()
 
@@ -3815,64 +2933,8 @@ def dump_bip32_privkeys(xpriv, paths='m/0', fmt='addr', **kw):
 	for child in xpriv.multi_ckd_xpriv(paths):
 		print('%s: %s'%(child.fullpath, dump_key(keyinfo(child, kw.get('network'), False, True))))
 
-class TestPywallet(unittest.TestCase):
-	def setUp(self):
-		super(TestPywallet, self).setUp()
-		warnings.simplefilter('ignore')
-	def test_btc_privkey_1(self):
-		key = keyinfo('1', network=network_bitcoin, force_compressed=False)
-		self.assertEqual(key.addr, '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm')
-		self.assertEqual(key.wif, '5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreAnchuDf')
-		self.assertEqual(key.secret, b'\x00'*31+b'\x01')
-		self.assertFalse(key.compressed)
-	def test_btc_privkey_1_from_wif(self):
-		key = keyinfo('5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreAnchuDf', network=network_bitcoin, force_compressed=False)
-		self.assertEqual(key.addr, '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm')
-	def test_bad_privkey_format(self):
-		with self.assertRaises(Exception):
-			keyinfo('g', network=network_bitcoin)
-	def test_btc_bip32_test_vectors(self):
-		self.assertEqual(
-			Xpriv.from_seed(binascii.unhexlify('000102030405060708090a0b0c0d0e0f'))
-				.ckd_xpriv(0x80000000, 1, -2, 2, 1000000000).xpub(),
-			'xpub6H1LXWLaKsWFhvm6RVpEL9P4KfRZSW7abD2ttkWP3SSQvnyA8FSVqNTEcYFgJS2UaFcxupHiYkro49S8yGasTvXEYBVPamhGW6cFJodrTHy'
-		)
-		self.assertEqual(
-			Xpriv.from_seed(binascii.unhexlify('fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542'))
-				.ckd_xpriv(0, -2147483647, 1, -2147483646, 2).xpub(),
-			'xpub6FnCn6nSzZAw5Tw7cgR9bi15UV96gLZhjDstkXXxvCLsUXBGXPdSnLFbdpq8p9HmGsApME5hQTZ3emM2rnY5agb9rXpVGyy3bdW6EEgAtqt'
-		)
-		self.assertEqual(
-			Xpriv.from_seed(binascii.unhexlify('4b381541583be4423346c643850da4b320e46a87ae3d2a4e6da11eba819cd4acba45d239319ac14f863b8d5ab5a0d0c64d2e8a1e7d1457df2e5a3c51c73235be'))
-				.ckd_xpriv(0x80000000).xpub(),
-			'xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y'
-		)
-	def test_btc_bip32_2(self):
-		xpriv = "xprv9s21ZrQH143K2gCVXRarFj5npbgjtJ7MuNb15AoRYJ92ZMA1hcnoqpxJKfcsiMHP6cNmDKHCTphsC6uzzyzr2MwjXbDxg6U9ivvEupavYUb"
-		paths = "m/7-8'/3/99'/38-39"
-		keys = Xpriv.b58decode(xpriv).multi_ckd_xpriv(paths)
-		for k, privkey in zip(keys, [
-					'5ca736abd3b19632d11366c4dd79c227236500879980c6a1fc4e7c1e33933350',
-					'8c793bce5319bf04349b5e4d21d091a98c1a1ad632bffc0425a5f4802c999a76',
-					'692f2ddb1d5c7213d194643984642df6e9a5c8cd14a1a6b4054571955fcab05f',
-					'8739db9026ceb50d7774ef145bd27e899228700f1096072fe9d26f8387378314',
-				]):
-			self.assertEqual(k.key, binascii.unhexlify(privkey))
-	def test_btc_bip39_test_vectors(self):
-		self.assertEqual(
-			Xpriv.from_mnemomic('abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about', 'TREZOR').b58encode(),
-			'xprv9s21ZrQH143K3h3fDYiay8mocZ3afhfULfb5GX8kCBdno77K4HiA15Tg23wpbeF1pLfs1c5SPmYHrEpTuuRhxMwvKDwqdKiGJS9XFKzUsAF'
-		)
-		self.assertEqual(
-			Xpriv.from_mnemomic('void come effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve unfold', 'TREZOR').b58encode(),
-			'xprv9s21ZrQH143K39rnQJknpH1WEPFJrzmAqqasiDcVrNuk926oizzJDDQkdiTvNPr2FYDYzWgiMiC63YmfPAa2oPyNB23r2g7d1yiK6WpqaQS'
-		)
-
-	def test_btc_key_recovery(self):
-		pass
-
 if __name__ == '__main__':
-	parser = OptionParser(usage="%prog [options]", version="%prog 1.1")
+	parser = OptionParser(usage="%prog [options]", version="%prog 2.0b1")
 
 	parser.add_option("--dump_bip32", nargs=2,
 		help="dump the keys from a xpriv and a path, usage: --dump_bip32 xprv9s21ZrQH143K m/0H/1-2/2H/2-4")
@@ -3918,6 +2980,9 @@ if __name__ == '__main__':
 	parser.add_option("--namecoin", dest="namecoin", action="store_true",
 		help="use namecoin address type")
 
+	parser.add_option("--doge", dest="dogecoin", action="store_true",
+		help="use dogecoin address type")
+
 	parser.add_option("--eth", dest="ethereum", action="store_true",
 		help="use ethereum address type")
 
@@ -3960,15 +3025,8 @@ if __name__ == '__main__':
 	parser.add_option("--random_key", action="store_true",
 		help="print info of a randomly generated private key")
 
-	parser.add_option("--whitepaper", action="store_true",
-		help="write the Bitcoin whitepaper using bitcoin-cli or blockchain.info")
-
 	parser.add_option("--minimal_encrypted_copy", action="store_true",
 		help="write a copy of an encrypted wallet with only an empty address, *should* be safe to share when needing help bruteforcing the password")
-
-	parser.add_option("--tests", action="store_true",
-		help="run tests")
-
 
 #	parser.add_option("--forcerun", dest="forcerun",
 #		action="store_true",
@@ -3985,17 +3043,9 @@ if __name__ == '__main__':
 #		if options.forcerun is None:
 #			exit(0)
 
-	if options.tests:
-		unittest.main(argv=sys.argv[:1] + ['TestPywallet'])
-		exit()
-
 	if options.dump_bip32:
 		print("Warning: single quotes (') may be parsed by your terminal, please use \"H\" for hardened keys")
 		dump_bip32_privkeys(*options.dump_bip32, format=options.bip32_format)
-		exit()
-
-	if options.whitepaper:
-		whitepaper()
 		exit()
 
 	if options.passphrase:
@@ -4004,7 +3054,6 @@ if __name__ == '__main__':
 	if not(options.clone_watchonly_from is None) and options.clone_watchonly_to:
 		clone_wallet(options.clone_watchonly_from, options.clone_watchonly_to)
 		exit(0)
-
 
 	if options.recover:
 		if options.recov_size is None or options.recov_device is None or options.recov_outputdir is None:
@@ -4034,7 +3083,6 @@ if __name__ == '__main__':
 		recoveredKeys=recov(device, passes, size, 10240, options.recov_outputdir)
 		recoveredKeys=list(set(recoveredKeys))
 #		print(recoveredKeys[0:5])
-
 
 		db_env = create_env(options.recov_outputdir)
 		recov_wallet_name = "recovered_wallet_%s.dat"%ts()
@@ -4076,11 +3124,6 @@ if __name__ == '__main__':
 
 		exit(0)
 
-
-	if 'bsddb' in missing_dep:
-		print("pywallet needs 'bsddb' package to run, please install it")
-		exit(0)
-
 	if 'ecdsa' in missing_dep:
 		print("Warning: 'ecdsa' package is not installed, so you won't be able to sign/verify messages but everything else will work fine")
 
@@ -4106,26 +3149,28 @@ if __name__ == '__main__':
 		exit(0)
 
 	network = network_bitcoin
-	if not(options.otherversion is None):
+	if options.otherversion is not None:
 		try:
 			network = find_network(options.otherversion)
 			if not network:
-				network = Network('Unknown network', int(options.otherversion), None, None, None)
+				network = Network('Unknown network', int(options.otherversion), 0, 0, '')
 				print("Some network info is missing: please use the complete network format")
 		except:
 			network_info = options.otherversion.split(',')
 			parse_int=lambda x:int(x, 16) if x.startswith('0x') else int(x)
 			network = Network(network_info[0], parse_int(network_info[1]), parse_int(network_info[2]), parse_int(network_info[3]), network_info[4])
 	if options.namecoin:
-		network = Network('Namecoin', 52, 13, 180, 'nc')
+		network = network_namecoin
 	elif options.testnet:
 		db_dir += "/testnet3"
 		network = network_bitcoin_testnet3
+	elif options.dogecoin:
+		network = network_dogecoin
 	elif options.ethereum:
 		network = network_ethereum
 
-	if not(options.keyinfo is None) or options.random_key:
-		if not options.keyinfo:
+	if options.keyinfo or options.random_key:
+		if not options.key:
 			options.key = binascii.hexlify(os.urandom(32))
 		keyinfo(options.key, network, True, False)
 		print("")
@@ -4183,12 +3228,12 @@ if __name__ == '__main__':
 		for pbk in encrypted_keys[::-1]:
 			p2pkh, p2wpkh, witaddr, _ = pubkey_info(pbk['public_key'], network)
 			for addr in [p2pkh, p2wpkh, witaddr]:
-				has_balance = raw_input(addr + ': ') != ''
+				has_balance = input(addr + ': ') != ''
 				if has_balance:
 					print('')
 					break
 			if not has_balance:
-				if raw_input("\nAre you REALLY sure the 3 addresses above have an empty balance? (type 'YES') ") == 'YES':
+				if input("\nAre you REALLY sure the 3 addresses above have an empty balance? (type 'YES') ") == 'YES':
 					output_db = open_wallet(db_env, minimal_wallet, True)
 					output_db.put(*mkey)
 					output_db.put(pbk['__key__'], pbk['__value__'])
@@ -4216,13 +3261,13 @@ if __name__ == '__main__':
 		if options.dumpformat == 'addr':
 			addrs = list(map(lambda x:x["addr"], json_db["keys"]+json_db["pool"]))
 			json_db = addrs
-		wallet = json.dumps(json_db, sort_keys=True, indent=4)
+		wallet = json.dumps(json_db, sort_keys=True, indent=4, default=codecs.decode)
 		print(wallet)
 		exit()
 	elif options.key:
 		if json_db['version'] > max_version:
 			print("Version mismatch (must be <= %d)" % max_version)
-		elif options.key in private_keys or options.key in private_hex_keys:
+		elif options.key in private_keys:
 			print("Already exists")
 		else:
 			db = open_wallet(db_env, wallet_name, writable=True)
@@ -4234,8 +3279,3 @@ if __name__ == '__main__':
 
 			db.close()
 		exit()
-
-
-
-
-
